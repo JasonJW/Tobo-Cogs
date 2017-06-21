@@ -10,18 +10,18 @@ from cogs.utils.dataIO import dataIO
 from cogs.utils import checks
 from cogs.utils.chat_formatting import box, pagify
 from datetime import datetime
+from collections import namedtuple
 
 _LOGGER = logging.getLogger('red.r6stats')
-FOLDER_PATH = "data/r6stats"
-SETTINGS_PATH = "{}/settings.json".format(FOLDER_PATH)
-DEFAULT_SETTINGS = {}
-
+# Platform IDs
 UPLAY = 'uplay'
 XBOX = 'xbl'
 PLAYSTATION = 'psn'
+# Region IDs
 NA = 'ncsa'
 EU = 'emea'
 ASIA = 'apac'
+# Mapping platform aliases to platform ID
 PLATFORMS = {
     "xb1":          XBOX,
     "xone":         XBOX,
@@ -34,25 +34,25 @@ PLATFORMS = {
     "uplay":        UPLAY,
     "pc":           UPLAY
 }
-
+# Mapping platform ID to R6DB platform URI path parameter
 R6DB_PLATFORMS = {
     XBOX:         "xbox.",
     PLAYSTATION:  "ps4.",
     UPLAY:        ""
 }
-
+# Mapping platform ID to colour
 PLATFORM_COLOURS = {
     XBOX:         discord.colour.Colour.green(),
     PLAYSTATION:  discord.colour.Colour.magenta(),
     UPLAY:        discord.colour.Colour.blue()
 }
-
+# Mapping platform ID to platform username
 PLATFORM_USERNAMES = {
     XBOX: "Xbox Gamertag",
     PLAYSTATION: "PSN ID",
     UPLAY: "Uplay Nickname"
 }
-
+# Mapping possible region aliases to region ID
 REGIONS = {
     "na":       NA,
     "us":       NA,
@@ -64,13 +64,13 @@ REGIONS = {
     "anz":      ASIA,
     "oceania":  ASIA
 }
-
+# Mapping region ID to region name
 REGION_NAMES = {
     ASIA: "Asia",
     EU:   "EU",
     NA:   "NA"
 }
-
+# Mapping rank ID to rank name
 RANKS = (
     'Unranked',
     'Copper IV', 'Copper III', 'Copper II', 'Copper I', 
@@ -80,26 +80,24 @@ RANKS = (
     'Platinum III', 'Platinum II', 'Platinum I', 
     'Diamond'
 )
+# Testing username validity
+PERMITTED_CHARS = set(ascii_lowercase + digits + '._- ')
 
 class R6StatsError(Exception):
     """Base exception for this cog."""
     pass
 
-class NoCredentials(R6StatsError):
-    """No credentials were given."""
-    pass
-
-class InvalidCredentials(R6StatsError):
-    pass
-
-class APIError(R6StatsError):
+class NoStatsFound(R6StatsError):
+    """No stats found for {username}."""
     pass
 
 class ResourceNotFound(R6StatsError):
     """Search had no results."""
+    pass
 
 class InvalidUsername(R6StatsError):
-    """That is not a valid {platform_username}."""
+    """Invalid {platform_username}."""
+    pass
 
 class HttpError(R6StatsError):
     """HTTP data was invalid or unexpected"""
@@ -129,24 +127,13 @@ class R6Stats:
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.settings = dataIO.load_json(SETTINGS_PATH)
-        self.client = R6StatsClient("Red-DiscordBot-ToboCogs")
-        if "email" not in self.settings or "password" not in self.settings:
-            self.auth = None
-        else:
-            self.auth = api.Auth(self.settings["email"], self.settings["password"])
-        
-    @checks.is_owner()
-    @commands.command()
-    async def r6auth(self, email: str, password: str):
-        """Give the bot an Ubisoft account login to request stats."""
-        self.settings["email"] = email
-        self.settings["password"] = password
-        self.auth = api.Auth(email=email, password=password)
-        dataIO.save_json(SETTINGS_PATH, self.settings)
-        await self.bot.say("Settings saved.")
+        self.r6db_client = R6DBClient(app_id="Red-DiscordBot-ToboCogs")
+        self.stats_client = R6StatsClient()
 
-    @commands.group(aliases=["r6s", "stats"], invoke_without_command=True, pass_context=True)
-    async def r6stats(self, ctx: commands.Context, username: str, platform: str="Uplay"):
+    @commands.group(aliases=["r6s", "stats"], 
+                    invoke_without_command=True, pass_context=True)
+    async def r6stats(self, ctx: commands.Context, 
+                      username: str, platform: str="Uplay"):
         """Overall stats for a particular player.
         
         Example: !r6s Tobotimus xbox"""
@@ -157,10 +144,12 @@ class R6Stats:
                 await player.check_general()
                 await player.check_level()
             except api.InvalidRequest:
-                await self.bot.say("There are no stats available for that player.")
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
-            if player.xp is None or player.xp == 0:
-                await self.bot.say("There are no stats available for that player.")
+            if player.xp in (None, 0):
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
             platform = player.platform
             username = player.name
@@ -179,26 +168,31 @@ class R6Stats:
                    "".format(kills=player.kills,
                              deaths=player.deaths,
                              ratio=ratio))
-            w_perc = ("{0:.1f}".format(player.matches_won/player.matches_played*100) 
-                      if player.matches_played != 0 else "--.-")
+            w_perc = (
+                "{0:.1f}".format(
+                    player.matches_won / player.matches_played * 100)
+                if player.matches_played != 0 else "--.-")
             w_l = "{} - {}".format(player.matches_won, player.matches_lost)
             data.add_field(name="Kills - Deaths", value=k_d)
             data.add_field(name="Headshot %", value="{}%".format(hs))
             data.add_field(name="Wins - Losses", value=w_l)
             data.add_field(name="Win %", value="{}%".format(w_perc))
-            data.add_field(name="Playtime", value="{0:.1f}H".format(player.time_played / 3600))
+            data.add_field(name="Playtime", value=(
+                "{0:.1f}H".format(player.time_played / 3600)))
             data.add_field(name="Level", value=player.level)
             await self.bot.say(embed=data)
 
     @r6stats.command(pass_context=True)
-    async def rank(self, ctx: commands.Context, username: str, platform: str="Uplay", region: str="ANZ"):
+    async def rank(self, ctx: commands.Context, username: str, 
+                   platform: str="Uplay", region: str="ANZ"):
         """Ranked stats for a particular player.
         
         Example: !r6s rank Tobotimus uplay NA"""
         await self.bot.send_typing(ctx.message.channel)
         region = REGIONS.get(region.lower())
         if region is None: 
-            await self.bot.say("Invalid region, please use `eu`, `na`, `asia`.")
+            await self.bot.say(
+                "Invalid region, please use `eu`, `na`, `asia`.")
             return
         player = await self.request_player(username, platform)
         if player is not None:
@@ -206,18 +200,20 @@ class R6Stats:
                 await player.check_queues()
                 await player.check_level()
             except api.InvalidRequest:
-                await self.bot.say("There are no stats available for that player.")
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
             if player.xp is None or player.xp == 0:
-                await self.bot.say("There are no stats available for that player.")
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
             platform = player.platform
             username = player.name
             rank = await player.get_rank(region)
-            data = discord.Embed(title=username, 
-                                 description=(
-                                     "Ranked stats for {} region"
-                                              "".format(REGION_NAMES.get(region))))
+            data = discord.Embed(
+                title=username, 
+                description=("Ranked stats for {} region"
+                             "".format(REGION_NAMES.get(region))))
             data.timestamp = ctx.message.timestamp
             data.colour = PLATFORM_COLOURS.get(platform)
             w_perc = ("{0:.1f}".format(
@@ -250,7 +246,8 @@ class R6Stats:
             await self.bot.say(embed=data)
 
     @r6stats.command(aliases=["other"], pass_context=True)
-    async def misc(self, ctx: commands.Context, username: str, platform: str="Uplay"):
+    async def misc(self, ctx: commands.Context, 
+                   username: str, platform: str="Uplay"):
         """Get Miscellaneous stats, including a hacker rating!
         
         Example: !r6s misc Tobotimus uplay
@@ -262,10 +259,12 @@ class R6Stats:
                 await player.check_general()
                 await player.check_level()
             except api.InvalidRequest:
-                await self.bot.say("There are no stats available for that player.")
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
             if player.xp is None or player.xp == 0:
-                await self.bot.say("There are no stats available for that player.")
+                await self.bot.say(
+                    "There are no stats available for that player.")
                 return
             platform = player.platform
             username = player.name
@@ -305,15 +304,9 @@ class R6Stats:
             data.add_field(name="Hacker Rating", value=hacker)
             await self.bot.say(embed=data)
 
-    #@r6stats.command(pass_context=True, hidden=True)
-    #async def operator(self, ctx: commands.Context, username: str, operator: str, platform: str="Uplay"):
-    #    """[WIP] Get a player's stats for a particular operator.
-
-    #    Example: [p]r6s operator Tobotimus Mira PS4
-    #    """
-
     @commands.command(pass_context=True)
-    async def r6db(self, ctx: commands.Context, username: str, platform: str='Uplay', result:str=''):
+    async def r6db(self, ctx: commands.Context, username: str, 
+                   platform: str='Uplay', result:str=''):
         """Search a player's aliases on R6DB.
         
         [result] (optional) the index of the search result you want to retrieve."""
@@ -323,7 +316,8 @@ class R6Stats:
             await self.bot.say("Invalid platform specified.")
             return
         try:
-            search_results = await self.client.get_fuzzy(username, platform=platform)
+            search_results = await self.r6db_client.get_fuzzy(
+                username, platform=platform)
         except HttpError as e:
             _LOGGER.debug(str(e))
             await self.bot.say(e._get_reason())
@@ -371,18 +365,13 @@ class R6Stats:
             await self.bot.say(box(page, lang='py'))
 
     async def request_player(self, username: str, platform: str):
-        if self.auth is None:
-            await self.bot.say(
-                "The owner needs to set the credentials first.\n"
-                "See: `[p]r6auth`")
-            return
         platform = PLATFORMS.get(platform.lower())
         if platform is None:
             await self.bot.say("Invalid platform specified.")
             return
         player = None
         try:
-            player = await self.auth.get_player(username, platform)
+            player = await self.stats_client.get_player(username, platform=platform)
         except:
             await self.bot.say("Player not found!")
             return
@@ -404,13 +393,17 @@ class R6Stats:
             elif player['lastPlayed'] == 1:
                 player['lastPlayed'] = 'Yesterday'
             else:
-                player['lastPlayed'] = "{} days ago".format(player['lastPlayed'])
-            msg += ("\n**{idx}. {name}**  | Lvl {lvl} | Rank: {rank} {region}"
+                player['lastPlayed'] = "{} days ago".format(
+                    player['lastPlayed'])
+            msg += ("\n**{idx}. {name}**  | Lvl {lvl} | "
+                    "Rank: {rank} {region}"
                     " | Last played {last_played}"
-                    "".format(idx=idx, name=player.get('name'), lvl=player.get('level'), 
+                    "".format(idx=idx, name=player.get('name'), 
+                              lvl=player.get('level'), 
                                 rank=rank_info[0], region=rank_info[2], 
                                 last_played=player['lastPlayed']))
-            previous = '`{}`'.format("`, `".join(player['preview'])) if player['preview'] else 'None'
+            previous = ('`{}`'.format("`, `".join(player['preview'])) 
+                        if player['preview'] else 'None')
             msg += ("\n    *Previous aliases:* {}"
                     "".format(previous))
             if idx >= 5: break
@@ -442,11 +435,10 @@ class R6Stats:
                 date_str, "%Y-%m-%dT%H:%M:%S.%fZ").strftime(
                     "%d/%m/%Y")
 
-class R6StatsClient:
-    """Client to interface with external databases and 
-    make HTTP requests."""
+class R6DBClient:
+    """Client to interface with r6db.com via HTTP requests."""
 
-    def __init__(self, app_id: str):
+    def __init__(self, *, app_id: str):
         headers = {
             "X-App-Id": app_id
         }
@@ -455,10 +447,9 @@ class R6StatsClient:
     async def get_player(self, username: str, *,
                          platform: str='', 
                          exact: int=1):
-        """Requests a player from R6DB and returns their 
+        """Searches for a player from R6DB and returns their 
         data as a json. Usernames are case-sensitive."""
-        permitted_chars = set(ascii_lowercase + digits + '._- ')
-        if any(c not in permitted_chars for c in username.lower()):
+        if any(c not in PERMITTED_CHARS for c in username.lower()):
             raise InvalidUsername()
         username = username.replace(' ', '%20')
         platform = R6DB_PLATFORMS.get(platform)
@@ -472,6 +463,7 @@ class R6StatsClient:
         resp = await self.session.get(url)
         if resp.status != 200:
             raise HttpError(resp=resp, content=await resp.json())
+        self.session.close()
         return await resp.json()
 
     async def get_fuzzy(self, username: str, *,
@@ -495,10 +487,12 @@ class R6StatsClient:
                 if idx >= 2:
                     break
             if player['lastPlayed'].get('last_played') is None:
-                player['lastPlayed'] = None # For some reason this field is sometimes empty
+                # For some reason this field is sometimes empty
+                player['lastPlayed'] = None
             else:
                 last_played_date = datetime.strptime(
-                    player['lastPlayed'].get('last_played'), "%Y-%m-%dT%H:%M:%S.%fZ")
+                    player['lastPlayed'].get('last_played'), 
+                    "%Y-%m-%dT%H:%M:%S.%fZ")
                 player['lastPlayed'] = (datetime.utcnow() - last_played_date).days
             del player['updated_at']
             ret.append(player)
@@ -506,16 +500,19 @@ class R6StatsClient:
             raise ResourceNotFound()
         return ret
 
-def check_folders():
-    if not os.path.exists(FOLDER_PATH):
-        _LOGGER.info("Creating " + FOLDER_PATH + " folder...")
-        os.makedirs(FOLDER_PATH)
+class R6StatsClient():
+    """Client to interface with r6stats.com via HTTP requests."""
 
-def check_files():
-    if not dataIO.is_valid_json(SETTINGS_PATH):
-        dataIO.save_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+    def __init__(self):
+        self.session = aiohttp.ClientSession()
+
+    async def get_player(self, username: str, *,
+                         platform: str=''):
+        """Get a player from the R6Stats API. Returns a 
+        named tuple formatted as (name, platform, ubisoft_id, 
+        stats, level, xp)"""
+
+R6PlayerStats = namedtuple('R6PlayerStats', ['name', 'platform', 'ubisoft_id', 'stats', 'level', 'xp'])
 
 def setup(bot):
-    check_folders()
-    check_files()
     bot.add_cog(R6Stats(bot))
