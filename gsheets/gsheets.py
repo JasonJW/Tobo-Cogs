@@ -66,7 +66,7 @@ class HttpError(GSheetsError):
 
 class GSheets:
     """Display data from Google Sheets in discord!
-    
+
     Get ranges from any Google Sheet (which is shared with the bot), and display it as a table in discord."""
 
     def __init__(self, bot: commands.Bot):
@@ -87,8 +87,8 @@ class GSheets:
          - <url> The URL to the sheet
          - <privacy> (optional) where this sheet can be accessed (global, server or channel)
 
-        NOTE: Sheets can have conflicting names if they are in different scopes. When getting 
-        data from those sheets, it will use the sheet with the most local scope. Also, sheets 
+        NOTE: Sheets can have conflicting names if they are in different scopes. When getting
+        data from those sheets, it will use the sheet with the most local scope. Also, sheets
         which are added in a server's default channel cannot have 'channel' privacy.
         """
         if self.gc is None:
@@ -180,7 +180,8 @@ class GSheets:
         msg = '\n%s\n' % tabulate(table, headers)
         msg = pagify(msg)
         for page in msg:
-            await self.bot.say(box(page))
+            # await self.bot.say(box(page))
+            await self.pages_menu(ctx=ctx, embed_list=msg, timeout=60)
 
     @commands.command(pass_context=True)
     @checks.is_owner()
@@ -215,12 +216,12 @@ class GSheets:
         await self.bot.say("Authentication successful.")
 
     def name_in_scope(self, name, scope_id):
-        """Returns True if there is already a sheet with the given name in 
+        """Returns True if there is already a sheet with the given name in
         the given scope."""
         return scope_id in self.sheets and name in self.sheets[scope_id]
 
     def get_sheet_id(self, channel: discord.Channel, name: str):
-        """Return the sheet with the given name and context. Returns None 
+        """Return the sheet with the given name and context. Returns None
         if the sheet does not exist."""
         if channel.is_private:
             scopes = (channel.id, GLOBAL)
@@ -235,7 +236,7 @@ class GSheets:
                 return sheet
 
     def get_scope(self, privacy, channel_id: str, server_id: str):
-        """Get a scope given a sheet's privacy and context. Returns None if 
+        """Get a scope given a sheet's privacy and context. Returns None if
         privacy option is invalid."""
         return {
             CHANNEL: channel_id,
@@ -245,9 +246,9 @@ class GSheets:
 
     def get_credentials(self):
         """Gets user credentials from storage.
-        
+
         Returns None if nothing has been stored.
-        
+
         Returns:
             Credentials, the obtained credential.
         """
@@ -261,11 +262,11 @@ class GSheets:
 class GSheetsClient:
     """Interface to get data from google sheets.
 
-    This module should be thread-safe. Currently, all 
-    requests are done using the aiohttp library except for 
-    refreshing access tokens, which is done using a new 
-    instance of httplib2.Http for every request. (getting 
-    the initial access token isn't done in this class). 
+    This module should be thread-safe. Currently, all
+    requests are done using the aiohttp library except for
+    refreshing access tokens, which is done using a new
+    instance of httplib2.Http for every request. (getting
+    the initial access token isn't done in this class).
     """
 
     def __init__(self, credentials: client.OAuth2Credentials):
@@ -273,14 +274,14 @@ class GSheetsClient:
         self.session = ClientSession()
 
     async def check_url(self, url):
-        """Checks if a URL points to a valid spreadsheet, 
-        which can be accessed by the client. 
+        """Checks if a URL points to a valid spreadsheet,
+        which can be accessed by the client.
 
-        Raises InvalidSheetsURL if the spreadsheet's ID could not 
+        Raises InvalidSheetsURL if the spreadsheet's ID could not
         be found in the URL.
-        Raises HttpError if the client could not find or 
+        Raises HttpError if the client could not find or
         access the spreadsheet.
-        
+
         Returns:
             The spreadsheet's ID.
         """
@@ -295,12 +296,12 @@ class GSheetsClient:
         raise InvalidSheetsURL()
 
     async def check_key(self, key):
-        """Checks if the client can access the sheet with the given 
-        key. 
+        """Checks if the client can access the sheet with the given
+        key.
 
-        Raises HttpError if the client could not find or 
+        Raises HttpError if the client could not find or
         access the spreadsheet.
-        
+
         Returns:
             The spreadsheet's ID.
         """
@@ -321,12 +322,12 @@ class GSheetsClient:
             raise HttpError(resp=resp, content=await resp.json())
 
     async def request(self, method, url: str):
-        """Perform an authorized http request. Applies 
-        access token from credentials to headers and refreshes 
+        """Perform an authorized http request. Applies
+        access token from credentials to headers and refreshes
         access token if needed.
 
-        Token refresh is done using a httplib2.Http() instance. 
-        This is still thread-safe because a new instance is being 
+        Token refresh is done using a httplib2.Http() instance.
+        This is still thread-safe because a new instance is being
         passed in for a single optional request.
         """
         headers = {}
@@ -337,6 +338,85 @@ class GSheetsClient:
     async def get(self, url: str):
         """Perform an authorized http GET request."""
         return await self.request('GET', url)
+
+    async def pages_menu(self, ctx, embed_list: list, category: str='', message: discord.Message=None, page=0, timeout: int=30, choice=False):
+        """menu control logic for this taken from
+           https://github.com/Lunar-Dust/Dusty-Cogs/blob/master/menu/menu.py"""
+        print('list len = {}'.format(len(embed_list)))
+        length = len(embed_list)
+        em = embed_list[page]
+        if not message:
+            message = await self.bot.say(embed=em)
+            if length > 5:
+                await self.bot.add_reaction(message, '⏪')
+            if length > 1:
+                await self.bot.add_reaction(message, '◀')
+            if choice is True:
+                await self.bot.add_reaction(message,'🆗')
+            await self.bot.add_reaction(message, '❌')
+            if length > 1:
+                await self.bot.add_reaction(message, '▶')
+            if length > 5:
+                await self.bot.add_reaction(message, '⏩')
+        else:
+            message = await self.bot.edit_message(message, embed=em)
+        await asyncio.sleep(1)
+
+        react = await self.bot.wait_for_reaction(message=message, timeout=timeout,emoji=['▶', '◀', '❌', '⏪', '⏩','🆗'])
+        # if react.reaction.me == self.bot.user:
+        #     react = await self.bot.wait_for_reaction(message=message, timeout=timeout,emoji=['▶', '◀', '❌', '⏪', '⏩','🆗'])
+        if react is None:
+            try:
+                try:
+                    await self.bot.clear_reactions(message)
+                except:
+                    await self.bot.remove_reaction(message,'⏪', self.bot.user) #rewind
+                    await self.bot.remove_reaction(message, '◀', self.bot.user) #previous_page
+                    await self.bot.remove_reaction(message, '❌', self.bot.user) # Cancel
+                    await self.bot.remove_reaction(message,'🆗',self.bot.user) #choose
+                    await self.bot.remove_reaction(message, '▶', self.bot.user) #next_page
+                    await self.bot.remove_reaction(message,'⏩', self.bot.user) # fast_forward
+            except:
+                pass
+            return None
+        elif react is not None:
+            # react = react.reaction.emoji
+            if react.reaction.emoji == '▶': #next_page
+                next_page = (page + 1) % len(embed_list)
+                # await self.bot.remove_reaction(message, '▶', react.user)
+                await self.bot.remove_reaction(message, '▶', react.user)
+                return await self.pages_menu(ctx, embed_list, message=message, page=next_page, timeout=timeout)
+            elif react.reaction.emoji == '◀': #previous_page
+                next_page = (page - 1) % len(embed_list)
+                await self.bot.remove_reaction(message, '◀', react.user)
+                return await self.pages_menu(ctx, embed_list, message=message, page=next_page, timeout=timeout)
+            elif react.reaction.emoji == '⏪': #rewind
+                next_page = (page - 5) % len(embed_list)
+                await self.bot.remove_reaction(message, '⏪', react.user)
+                return await self.pages_menu(ctx, embed_list, message=message, page=next_page, timeout=timeout)
+            elif react.reaction.emoji == '⏩': # fast_forward
+                next_page = (page + 5) % len(embed_list)
+                await self.bot.remove_reaction(message, '⏩', react.user)
+                return await self.pages_menu(ctx, embed_list, message=message, page=next_page, timeout=timeout)
+            elif react.reaction.emoji == '🆗': #choose
+                if choice is True:
+                    # await self.bot.remove_reaction(message, '🆗', react.user)
+                    prompt = await self.bot.say(SELECTION.format(category+' '))
+                    answer = await self.bot.wait_for_message(timeout=10, author=ctx.message.author)
+                    if answer is not None:
+                        await self.bot.delete_message(prompt)
+                        prompt = await self.bot.say('Process choice : {}'.format(answer.content.lower().strip()))
+                        url = '{}{}/{}'.format(BASEURL,category,answer.content.lower().strip())
+                        await self._process_item(ctx, url=url, category=category)
+                        await self.bot.delete_message(prompt)
+                else:
+                    pass
+            else:
+                try:
+                    return await self.bot.delete_message(message)
+                except:
+                    pass
+
 
 def check_folders():
     if not os.path.exists(FOLDER_PATH):
